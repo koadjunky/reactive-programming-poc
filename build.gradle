@@ -1,0 +1,35 @@
+plugins {
+    id 'idea'
+    id 'java'
+}
+
+apply plugin: 'java'
+
+group = 'eu.malycha'
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = '17'
+targetCompatibility = '17'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Project Reactor
+    implementation platform('io.projectreactor:reactor-bom:2020.0.20')
+    implementation 'io.projectreactor:reactor-core'
+
+    // Utils
+    implementation 'com.google.guava:guava:31.1-jre'
+    implementation 'org.apache.commons:commons-lang3:3.12.0'
+    implementation 'org.apache.commons:commons-collections4:4.4'
+
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.9.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.9.0'
+    testImplementation 'org.mockito:mockito-core:4.8.0'
+}
+
+test {
+    useJUnitPlatform()
+}
