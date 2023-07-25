@@ -6,7 +6,9 @@ import org.junit.jupiter.api.Test;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.Queue;
 
 class SinksManyBufferTest {
@@ -23,31 +25,70 @@ class SinksManyBufferTest {
 
     @Test
     void sinkStartsAsWarm() {
+        // Test checks if sink is warm before subscribing - it means it should buffer message 1 and 2 and emit them after
+        // subscribe. Then it becomes hot and emits Message 3.
         sink.tryEmitNext("Message 1");
         sink.tryEmitNext("Message 2");
-        flux.subscribe(System.out::println);
-        sink.tryEmitNext("Message 3");
+        StepVerifier.create(flux)
+            .expectSubscription()
+            .expectNext("Message 1")
+            .expectNext("Message 2")
+            .then(() -> sink.tryEmitNext("Message 3"))
+            .expectNext("Message 3")
+            .thenCancel()
+            .verify();
     }
 
     @Test
     void sinkBecomesWarmIfSubscriberCancels() {
-        flux.take(1).subscribe(System.out::println);
-        sink.tryEmitNext("Message 1");
-        sink.tryEmitNext("Message 2");
-        flux.take(1).subscribe(System.out::println);
+        // Test checks if sink returns to warm state after subscriber disconnects. It emits:
+        //  * Message 1 in hot state
+        //  * Bufferes message 2 (so it returns to warm state - in hot state, it would lose the message)
+        //  * Emits message 2 after second subscriber connects
+        StepVerifier.create(flux.take(1))
+            .expectSubscription()
+            .then(() -> sink.tryEmitNext("Message 1"))
+            .expectNext("Message 1")
+            .then(() -> sink.tryEmitNext("Message 2"))
+            .expectComplete()
+            .verify();
+
+        StepVerifier.create(flux.take(1))
+            .expectSubscription()
+            .expectNext("Message 2")
+            .expectComplete()
+            .verify();
     }
 
     @Test
     void sinkIsHotIfSubscriberExists() {
-        flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
+        // Test checks if sink is hot when subscriber exists. Since first subscriber consumes message 1, it will
+        // not wait for second subscriber. Second subscriber sees only message 2 emitted after it subscribes.
+        StepVerifier subscriber1 = StepVerifier.create(flux)
+            .expectSubscription()
+            .expectNext("Message 1")
+            .expectNext("Message 2")
+            .expectNext("Message 3")
+            .thenCancel()
+            .verifyLater();
+
         sink.tryEmitNext("Message 1");
-        flux.take(1).subscribe(s -> System.out.println("Subscriber 2: " + s));
-        sink.tryEmitNext("Message 2");
+
+        StepVerifier.create(flux.take(1))
+            .expectSubscription()
+            .then(() -> sink.tryEmitNext("Message 2"))
+            .expectNext("Message 2")
+            .expectComplete()
+            .verify(Duration.ofSeconds(1));
+
         sink.tryEmitNext("Message 3");
+        subscriber1.verify(Duration.ofSeconds(1));
     }
 
     @Test
     void onSubscribeIsTooEarlyForSubscription() {
+        // Test proves that message emitted in doOnSubscribe is not captured by subscribe on hot producer.
+        // Second subscriber only sees message 3 emitting after subscribe.
         flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
         sink.tryEmitNext("Message 1");
         flux.take(1)
@@ -58,7 +99,23 @@ class SinksManyBufferTest {
     }
 
     @Test
+    void doFirstIsTooEarlyForSubscription() {
+        // Test proves that message emitted in doFirst is not captured by subscribe on hot producer.
+        // Second subscriber only sees message 3 emitting after subscribe.
+        flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
+        sink.tryEmitNext("Message 1");
+        flux.take(1)
+            .singleOrEmpty()
+            .doFirst(() -> sink.tryEmitNext("Message 2"))
+            .subscribe(s -> System.out.println("Subscriber 2: " + s));
+        sink.tryEmitNext("Message 3");
+    }
+
+    @Test
     void onSubscribeWithToProcessorIsFineForSubscription() {
+        // Test proves that message emitted in doOnSubscribe is captured by subscribe on hot producer
+        // if ran through (deprecated) processor.
+        // Second subscriber sees message 2 emitted during subscribe.
         flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
         sink.tryEmitNext("Message 1");
         flux.take(1)
@@ -71,6 +128,8 @@ class SinksManyBufferTest {
 
     @Test
     void onSubscribeWithCacheIsTooEarlyForSubscription() {
+        // Test proves that message emitted in doOnSubscribe is not captured by subscribe on hot producer when ran through cache().
+        // Second subscriber only sees message 3 emitting after subscribe.
         flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
         sink.tryEmitNext("Message 1");
         flux.take(1)
@@ -83,6 +142,8 @@ class SinksManyBufferTest {
 
     @Test
     void onSubscribeWithShareIsTooEarlyForSubscription() {
+        // Test proves that message emitted in doOnSubscribe is not captured by subscribe on hot producer when ran through share().
+        // Second subscriber only sees message 3 emitting after subscribe.
         flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
         sink.tryEmitNext("Message 1");
         flux.take(1)
@@ -95,6 +156,9 @@ class SinksManyBufferTest {
 
     @Test
     void onSubscribeWithSecondSinkIsFineForSubscription() {
+        // Test proves that message emitted in doOnSubscribe is captured by subscribe on hot producer
+        // if ran through Sinks.many().
+        // Second subscriber sees message 2 emitted during subscribe.
         flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
         sink.tryEmitNext("Message 1");
 
@@ -115,6 +179,10 @@ class SinksManyBufferTest {
 
     @Test
     void onSubscribeWithSecondSinkIsFineForSubscription_onlyLastIsBuffered() {
+        // Test proves that message emitted in doOnSubscribe is captured by subscribe on warm producer
+        // if ran through Sinks.many().
+        // Second subscriber sees message 2 emitted during subscribe. Messages collected before subscribe
+        // are ignored.
         flux.subscribe(s -> System.out.println("Subscriber 1: " + s));
         sink.tryEmitNext("Message 1");
 
